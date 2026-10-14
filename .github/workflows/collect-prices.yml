@@ -1,0 +1,37 @@
+name: Coletar preços do radar
+
+on:
+  schedule:
+    # 08:00 em Brasília (UTC-3) durante o horário padrão.
+    - cron: '0 11 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  collect:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Baixar código
+        uses: actions/checkout@v4
+      - name: Configurar Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Executar testes
+        run: python -m unittest discover -s tests -v
+      - name: Coletar preços via SerpAPI
+        env:
+          SERPAPI_API_KEY: ${{ secrets.SERPAPI_API_KEY }}
+          ARTIFACT_INGEST_URL: ${{ secrets.ARTIFACT_INGEST_URL }}
+          ARTIFACT_INGEST_TOKEN: ${{ secrets.ARTIFACT_INGEST_TOKEN }}
+        run: python collector.py
+      - name: Publicar observações como artefato do workflow
+        uses: actions/upload-artifact@v4
+        with:
+          name: observacoes-${{ github.run_id }}
+          path: observations.jsonl
+          if-no-files-found: warn
+          retention-days: 30

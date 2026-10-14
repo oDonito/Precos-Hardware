@@ -17,6 +17,15 @@ from typing import Any
 from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 
+STORE_NAMES = {
+    "fastshop": "Fast Shop",
+    "magalu": "Magalu",
+    "mercadolivre": "Mercado Livre",
+    "lg": "LG",
+    "kabum": "KaBuM",
+    "amazon": "Amazon",
+}
+
 STORES = {
     "fastshop": ["fastshop.com.br"],
     "magalu": ["magazineluiza.com.br", "magalu.com"],
@@ -28,6 +37,19 @@ STORES = {
 
 class SerpApiAuthError(RuntimeError):
     """Raised when SerpAPI rejects the configured API key."""
+
+
+class SerpApiNoResultsError(RuntimeError):
+    """Raised when SerpAPI returns no Google results for a query."""
+
+
+def classify_serpapi_error(message: str) -> str:
+    text = message.lower()
+    if any(marker in text for marker in ("invalid api key", "unauthorized", "authentication", "api key")):
+        return "auth"
+    if "hasn't returned any results" in text or "no results" in text:
+        return "no_results"
+    return "other"
 
 
 CATALOG = [
@@ -121,7 +143,10 @@ def serpapi_search(api_key: str, query: str, location: str = "Brasília, Federal
             raise SerpApiAuthError("SerpAPI rejeitou SERPAPI_API_KEY; verifique se o secret contém uma chave ativa e sem espaços extras.") from exc
         raise
     if isinstance(payload, dict) and payload.get("error"):
-        raise SerpApiAuthError(f"SerpAPI rejeitou a consulta: {payload['error']}")
+        message = str(payload["error"])
+        if classify_serpapi_error(message) == "no_results":
+            raise SerpApiNoResultsError(message)
+        raise SerpApiAuthError(f"SerpAPI rejeitou a consulta: {message}")
     return payload.get("shopping_results", [])
 
 
@@ -136,11 +161,15 @@ def post_observations(url: str, token: str | None, observations: list[dict[str, 
             raise RuntimeError(f"ingest endpoint returned HTTP {response.status}")
 
 
+def build_search_query(item_name: str, store: str) -> str:
+    return f"{item_name} {STORE_NAMES.get(store, store)} preço"
+
+
 def collect(api_key: str, collected_at: datetime) -> list[dict[str, Any]]:
     observations: list[dict[str, Any]] = []
     for item in CATALOG:
         for store in STORES:
-            query = f"{item['name']} site:{STORES[store][0]}"
+            query = build_search_query(item["name"], store)
             try:
                 results = serpapi_search(api_key, query)
                 selected = select_store_result(results, store)
@@ -148,6 +177,8 @@ def collect(api_key: str, collected_at: datetime) -> list[dict[str, Any]]:
                     observations.append(build_observation(item_id=item["id"], item_name=item["name"], store=store, result=selected, collected_at=collected_at))
                 else:
                     print(f"unavailable: {item['id']} / {store}", file=sys.stderr)
+            except SerpApiNoResultsError as exc:
+                print(f"unavailable: {item['id']} / {store}: {exc}", file=sys.stderr)
             except SerpApiAuthError:
                 raise
             except Exception as exc:

@@ -5,6 +5,8 @@ from unittest.mock import patch
 from collector import (
     SerpApiAuthError,
     build_observation,
+    classify_serpapi_error,
+    build_search_query,
     collect,
     parse_brl,
     parse_shipping,
@@ -29,6 +31,17 @@ class CollectorTests(unittest.TestCase):
         ]
         chosen = select_store_result(results, "kabum")
         self.assertEqual(chosen["source"], "KaBuM!")
+
+    def test_search_query_avoids_site_operator_for_shopping(self):
+        query = build_search_query("Monitor Gamer LG UltraGear 34G600A", "fastshop")
+        self.assertNotIn("site:", query)
+        self.assertIn("Fast Shop", query)
+
+    def test_serpapi_no_results_is_not_authentication_error(self):
+        self.assertEqual(classify_serpapi_error("Google hasn't returned any results for this query."), "no_results")
+
+    def test_serpapi_invalid_key_is_authentication_error(self):
+        self.assertEqual(classify_serpapi_error("Invalid API key"), "auth")
 
     def test_serpapi_authentication_error_is_propagated(self):
         with patch("collector.serpapi_search", side_effect=SerpApiAuthError("invalid key")):

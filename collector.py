@@ -26,6 +26,10 @@ STORES = {
     "amazon": ["amazon.com.br"],
 }
 
+class SerpApiAuthError(RuntimeError):
+    """Raised when SerpAPI rejects the configured API key."""
+
+
 CATALOG = [
     {"id": "monitor-lg-34g600a", "name": "Monitor Gamer LG UltraGear Curvo 34G600A-B 34\" QuadHD 2K UltraWide 1800R, 160Hz", "target": 1450.0},
     {"id": "suporte-monitor-35", "name": "Suporte de mesa articulado para até 35\"", "target": 190.0},
@@ -108,8 +112,16 @@ def build_observation(
 def serpapi_search(api_key: str, query: str, location: str = "Brasília, Federal District, Brazil") -> list[dict[str, Any]]:
     params = urlencode({"engine": "google_shopping", "q": query, "location": location, "hl": "pt-br", "gl": "br", "api_key": api_key})
     request = Request(f"https://serpapi.com/search.json?{params}", headers={"User-Agent": "radar-precos-github/1.0"})
-    with urlopen(request, timeout=45) as response:
-        payload = json.load(response)
+    try:
+        with urlopen(request, timeout=45) as response:
+            payload = json.load(response)
+    except Exception as exc:
+        status = getattr(exc, "code", None)
+        if status in (401, 403):
+            raise SerpApiAuthError("SerpAPI rejeitou SERPAPI_API_KEY; verifique se o secret contém uma chave ativa e sem espaços extras.") from exc
+        raise
+    if isinstance(payload, dict) and payload.get("error"):
+        raise SerpApiAuthError(f"SerpAPI rejeitou a consulta: {payload['error']}")
     return payload.get("shopping_results", [])
 
 
@@ -136,21 +148,30 @@ def collect(api_key: str, collected_at: datetime) -> list[dict[str, Any]]:
                     observations.append(build_observation(item_id=item["id"], item_name=item["name"], store=store, result=selected, collected_at=collected_at))
                 else:
                     print(f"unavailable: {item['id']} / {store}", file=sys.stderr)
+            except SerpApiAuthError:
+                raise
             except Exception as exc:
                 print(f"error: {item['id']} / {store}: {exc}", file=sys.stderr)
     return observations
 
 
 def main() -> int:
-    api_key = os.environ.get("SERPAPI_API_KEY")
+    api_key = os.environ.get("SERPAPI_API_KEY", "").strip()
     if not api_key:
         print("SERPAPI_API_KEY is required", file=sys.stderr)
         return 2
     collected_at = datetime.now(timezone.utc)
-    observations = collect(api_key, collected_at)
+    try:
+        observations = collect(api_key, collected_at)
+    except SerpApiAuthError as exc:
+        print(str(exc), file=sys.stderr)
+        return 3
     output = Path(os.environ.get("OUTPUT_JSONL", "observations.jsonl"))
     serialized = "".join(json.dumps(row, ensure_ascii=False) + "\n" for row in observations)
     output.write_text(serialized, encoding="utf-8")
+    if not observations:
+        print("Nenhuma observação foi confirmada; o snapshot existente não será substituído.", file=sys.stderr)
+        return 4
     snapshot = Path(os.environ.get("SNAPSHOT_JSON", "data/observations.json"))
     snapshot.parent.mkdir(parents=True, exist_ok=True)
     snapshot.write_text(json.dumps({"generatedAt": collected_at.astimezone(timezone.utc).isoformat(), "observations": observations}, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")

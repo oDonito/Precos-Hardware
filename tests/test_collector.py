@@ -1,8 +1,11 @@
 import unittest
 from datetime import datetime, timezone
+from unittest.mock import patch
 
 from collector import (
+    SerpApiAuthError,
     build_observation,
+    collect,
     parse_brl,
     parse_shipping,
     select_store_result,
@@ -26,6 +29,11 @@ class CollectorTests(unittest.TestCase):
         ]
         chosen = select_store_result(results, "kabum")
         self.assertEqual(chosen["source"], "KaBuM!")
+
+    def test_serpapi_authentication_error_is_propagated(self):
+        with patch("collector.serpapi_search", side_effect=SerpApiAuthError("invalid key")):
+            with self.assertRaises(SerpApiAuthError):
+                collect("bad-key", datetime(2026, 10, 14, tzinfo=timezone.utc))
 
     def test_build_observation_calculates_total_only_with_known_shipping(self):
         captured = datetime(2026, 10, 14, 11, 0, tzinfo=timezone.utc)

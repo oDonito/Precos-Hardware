@@ -149,7 +149,11 @@ def main() -> int:
     collected_at = datetime.now(timezone.utc)
     observations = collect(api_key, collected_at)
     output = Path(os.environ.get("OUTPUT_JSONL", "observations.jsonl"))
-    output.write_text("".join(json.dumps(row, ensure_ascii=False) + "\n" for row in observations), encoding="utf-8")
+    serialized = "".join(json.dumps(row, ensure_ascii=False) + "\n" for row in observations)
+    output.write_text(serialized, encoding="utf-8")
+    snapshot = Path(os.environ.get("SNAPSHOT_JSON", "data/observations.json"))
+    snapshot.parent.mkdir(parents=True, exist_ok=True)
+    snapshot.write_text(json.dumps({"generatedAt": collected_at.astimezone(timezone.utc).isoformat(), "observations": observations}, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     ingest_url = os.environ.get("ARTIFACT_INGEST_URL")
     if ingest_url and observations:
         post_observations(ingest_url, os.environ.get("ARTIFACT_INGEST_TOKEN"), observations)

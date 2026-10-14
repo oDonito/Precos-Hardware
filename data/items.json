@@ -1,0 +1,14 @@
+{
+  "items": [
+    {"id":"monitor-lg-34g600a","name":"Monitor Gamer LG UltraGear Curvo 34G600A-B 34\" QuadHD 2K UltraWide 1800R, 160Hz","category":"Monitor","target":1450.0},
+    {"id":"suporte-monitor-35","name":"Suporte de mesa articulado para até 35\"","category":"Suporte de monitor","target":190.0},
+    {"id":"ryzen-5-7600x","name":"Ryzen 5 7600X, 6-Core, 12-Threads, 4.7GHz (5.3GHz Turbo)","category":"Processador (CPU)","target":1000.0},
+    {"id":"radeon-rx-9070xt","name":"AMD Radeon RX 9070 XT 16GB VRAM","category":"Placa de Vídeo (GPU)","target":4500.0},
+    {"id":"gigabyte-b650m-gaming-wifi","name":"Placa-Mãe Gigabyte B650M Gaming WIFI, B650, AMD AM5, M-ATX, DDR5","category":"Placa-Mãe","target":609.99},
+    {"id":"memoria-ddr5-16gb-5600","name":"Memória RAM 16GB DDR5 5600MHz","category":"Memória RAM","target":1200.0},
+    {"id":"ssd-nvme-1tb-6000","name":"SSD 1TB NVMe M.2, leitura 6000 MB/s","category":"Armazenamento (SSD)","target":800.0},
+    {"id":"fonte-850w-bronze","name":"Fonte 850W 80 Plus Bronze MSI MAG / Corsair","category":"Fonte de Alimentação (PSU)","target":325.0},
+    {"id":"aircooler-ak400-ag400","name":"Air Cooler DeepCool AK400 / AG400","category":"Cooler do Processador","target":190.0},
+    {"id":"gabinete-mid-tower-mesh","name":"Gabinete Gamer Mid Tower, frente Mesh, 3x Fans ARGB","category":"Gabinete Gamer","target":140.0}
+  ]
+}

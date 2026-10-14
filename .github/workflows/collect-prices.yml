@@ -25,8 +25,6 @@ jobs:
       - name: Coletar preços via SerpAPI
         env:
           SERPAPI_API_KEY: ${{ secrets.SERPAPI_API_KEY }}
-          ARTIFACT_INGEST_URL: ${{ secrets.ARTIFACT_INGEST_URL }}
-          ARTIFACT_INGEST_TOKEN: ${{ secrets.ARTIFACT_INGEST_TOKEN }}
         run: python collector.py
       - name: Publicar observações como artefato do workflow
         uses: actions/upload-artifact@v4
@@ -35,3 +33,22 @@ jobs:
           path: observations.jsonl
           if-no-files-found: warn
           retention-days: 30
+      - name: Enviar observações ao Cloudflare Worker
+        if: ${{ hashFiles('observations.jsonl') != '' }}
+        env:
+          CLOUDFLARE_WORKER_URL: ${{ secrets.CLOUDFLARE_WORKER_URL }}
+          CLOUDFLARE_INGEST_TOKEN: ${{ secrets.CLOUDFLARE_INGEST_TOKEN }}
+        run: |
+          python - <<'PY'
+          import json, os, urllib.request
+          path = 'observations.jsonl'
+          records = [json.loads(line) for line in open(path, encoding='utf-8') if line.strip()]
+          if not records:
+              print('Nenhuma observação encontrada; nada para enviar.')
+              raise SystemExit(0)
+          url = os.environ['CLOUDFLARE_WORKER_URL'].rstrip('/') + '/api/observations'
+          body = json.dumps({'collection': 'observations', 'records': records}).encode('utf-8')
+          request = urllib.request.Request(url, data=body, headers={'Content-Type': 'application/json', 'Authorization': 'Bearer ' + os.environ['CLOUDFLARE_INGEST_TOKEN']}, method='POST')
+          with urllib.request.urlopen(request, timeout=60) as response:
+              print(response.read().decode('utf-8'))
+          PY

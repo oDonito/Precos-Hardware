@@ -1,0 +1,13 @@
+name = "precos-hardware"
+main = "src/index.js"
+compatibility_date = "2026-10-14"
+workers_dev = true
+
+[assets]
+directory = "public"
+binding = "ASSETS"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "precos-hardware"
+database_id = "REPLACE_AFTER_D1_CREATE"

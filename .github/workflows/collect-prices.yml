@@ -21,12 +21,51 @@ jobs:
     steps:
       - name: Baixar código
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - name: Configurar Python
         uses: actions/setup-python@v5
         with:
           python-version: '3.12'
       - name: Executar testes
         run: python -m unittest discover -s tests -v
+      - name: Recuperar histórico dos snapshots versionados
+        run: |
+          python - <<'PY'
+          import json
+          import subprocess
+          from pathlib import Path
+
+          merged = {}
+          commits = subprocess.check_output(
+              ['git', 'log', '--format=%H', '--', 'data/observations.json'],
+              text=True,
+          ).splitlines()
+          for commit in commits:
+              result = subprocess.run(
+                  ['git', 'show', f'{commit}:data/observations.json'],
+                  text=True, capture_output=True,
+              )
+              if result.returncode != 0:
+                  continue
+              try:
+                  payload = json.loads(result.stdout)
+              except json.JSONDecodeError:
+                  continue
+              for observation in payload.get('observations', []):
+                  if observation.get('id'):
+                      merged[observation['id']] = observation
+          current = Path('data/observations.json')
+          payload = json.loads(current.read_text(encoding='utf-8')) if current.exists() else {}
+          for observation in payload.get('observations', []):
+              if observation.get('id'):
+                  merged[observation['id']] = observation
+          rows = sorted(merged.values(), key=lambda row: (row.get('collectedAt', ''), row.get('id', '')))
+          generated_at = payload.get('generatedAt')
+          current.write_text(json.dumps({'generatedAt': generated_at, 'observations': rows}, ensure_ascii=False, indent=2) + '\n', encoding='utf-8')
+          dates = sorted({row.get('collectedAt', '')[:10] for row in rows if row.get('collectedAt')})
+          print(f'Histórico recuperado: {len(rows)} observações em {dates}')
+          PY
       - name: Validar secret SerpAPI
         env:
           SERPAPI_API_KEY: ${{ secrets.SERPAPI_API_KEY }}
@@ -51,6 +90,18 @@ jobs:
         env:
           SERPAPI_API_KEY: ${{ secrets.SERPAPI_API_KEY }}
         run: python collector.py
+      - name: Verificar preservação do histórico
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          payload = json.loads(Path('data/observations.json').read_text(encoding='utf-8'))
+          observations = payload.get('observations', [])
+          dates = sorted({row.get('collectedAt', '')[:10] for row in observations if row.get('collectedAt')})
+          print(f'Snapshot contém {len(observations)} observações em {dates}')
+          if not observations:
+              raise SystemExit('Snapshot sem observações; publicação bloqueada.')
+          PY
       - name: Atualizar snapshot histórico no repositório
         run: |
           git config user.name "github-actions[bot]"

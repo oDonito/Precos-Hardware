@@ -7,6 +7,7 @@ from collector import (
     build_observation,
     classify_serpapi_error,
     build_search_query,
+    merge_observations,
     collect,
     parse_brl,
     parse_shipping,
@@ -47,6 +48,17 @@ class CollectorTests(unittest.TestCase):
         with patch("collector.serpapi_search", side_effect=SerpApiAuthError("invalid key")):
             with self.assertRaises(SerpApiAuthError):
                 collect("bad-key", datetime(2026, 10, 14, tzinfo=timezone.utc))
+
+    def test_merge_observations_handles_empty_incoming_without_loss(self):
+        old = [{"id": "2026-10-14_item_store", "price": 100}]
+        self.assertEqual(merge_observations(old, []), old)
+
+    def test_merge_observations_preserves_prior_days_and_replaces_same_id(self):
+        old = [{"id": "2026-10-14_item_store", "price": 100}]
+        new = [{"id": "2026-10-15_item_store", "price": 90}, {"id": "2026-10-14_item_store", "price": 95}]
+        merged = merge_observations(old, new)
+        self.assertEqual([row["id"] for row in merged], ["2026-10-14_item_store", "2026-10-15_item_store"])
+        self.assertEqual(merged[0]["price"], 95)
 
     def test_build_observation_calculates_total_only_with_known_shipping(self):
         captured = datetime(2026, 10, 14, 11, 0, tzinfo=timezone.utc)

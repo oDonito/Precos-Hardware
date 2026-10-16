@@ -165,6 +165,13 @@ def build_search_query(item_name: str, store: str) -> str:
     return f"{item_name} {STORE_NAMES.get(store, store)} preço"
 
 
+def merge_observations(existing: list[dict[str, Any]], incoming: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Keep all historical IDs; a repeated daily ID is refreshed by the newest run."""
+    merged = {str(row.get("id")): row for row in existing if row.get("id")}
+    merged.update({str(row.get("id")): row for row in incoming if row.get("id")})
+    return sorted(merged.values(), key=lambda row: (str(row.get("collectedAt", "")), str(row.get("id", ""))))
+
+
 def collect(api_key: str, collected_at: datetime) -> list[dict[str, Any]]:
     observations: list[dict[str, Any]] = []
     for item in CATALOG:
@@ -205,7 +212,16 @@ def main() -> int:
         return 4
     snapshot = Path(os.environ.get("SNAPSHOT_JSON", "data/observations.json"))
     snapshot.parent.mkdir(parents=True, exist_ok=True)
-    snapshot.write_text(json.dumps({"generatedAt": collected_at.astimezone(timezone.utc).isoformat(), "observations": observations}, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    existing: list[dict[str, Any]] = []
+    if snapshot.exists():
+        try:
+            existing_payload = json.loads(snapshot.read_text(encoding="utf-8"))
+            existing = existing_payload.get("observations", []) if isinstance(existing_payload, dict) else []
+        except (OSError, json.JSONDecodeError) as exc:
+            print(f"Não foi possível ler o snapshot existente; coleta cancelada para preservar o histórico: {exc}", file=sys.stderr)
+            return 5
+    merged = merge_observations(existing, observations)
+    snapshot.write_text(json.dumps({"generatedAt": collected_at.astimezone(timezone.utc).isoformat(), "observations": merged}, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     ingest_url = os.environ.get("ARTIFACT_INGEST_URL")
     if ingest_url and observations:
         post_observations(ingest_url, os.environ.get("ARTIFACT_INGEST_TOKEN"), observations)

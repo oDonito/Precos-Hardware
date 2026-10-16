@@ -53,7 +53,7 @@ def classify_serpapi_error(message: str) -> str:
 
 
 CATALOG = [
-    {"id": "monitor-lg-34g600a", "name": "Monitor Gamer LG UltraGear Curvo 34G600A-B 34\" QuadHD 2K UltraWide 1800R, 160Hz", "target": 1450.0},
+    {"id": "monitor-lg-34g600a", "name": "Monitor Gamer LG UltraGear Curvo 34G600A-B 34\" QuadHD 2K UltraWide 1800R, 160Hz", "search": "Monitor Gamer LG UltraGear Curvo 34G600A-B", "target": 1450.0},
     {"id": "suporte-monitor-35", "name": "Suporte de mesa articulado para até 35\"", "target": 190.0},
     {"id": "ryzen-5-7600x", "name": "Ryzen 5 7600X, 6-Core, 12-Threads, 4.7GHz (5.3GHz Turbo)", "target": 1000.0},
     {"id": "radeon-rx-9070xt", "name": "AMD Radeon RX 9070 XT 16GB VRAM", "target": 4500.0},
@@ -96,15 +96,27 @@ def _host_matches(link: str, domains: list[str]) -> bool:
     return any(domain in link_lower for domain in domains)
 
 
+def _source_matches(source: str, domains: list[str]) -> bool:
+    normalized = re.sub(r"[^a-z0-9]", "", (source or "").lower())
+    return any(re.sub(r"[^a-z0-9]", "", domain.split(".")[0].lower()) in normalized for domain in domains)
+
+
 def select_store_result(results: list[dict[str, Any]], store: str) -> dict[str, Any] | None:
     """Select the first result whose link or source matches the requested store."""
-    domains = STORES.get(store, [store])
-    for result in results:
-        source = str(result.get("source", ""))
-        link = str(result.get("link", ""))
-        if _host_matches(link, domains) or any(domain.split(".")[0] in source.lower() for domain in domains):
-            return result
-    return None
+    return select_store_results(results).get(store)
+
+
+def select_store_results(results: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
+    """Classify one Google Shopping response into at most one result per monitored store."""
+    selected: dict[str, dict[str, Any]] = {}
+    for store, domains in STORES.items():
+        for result in results:
+            source = str(result.get("source", ""))
+            link = str(result.get("link", ""))
+            if _host_matches(link, domains) or _source_matches(source, domains):
+                selected[store] = result
+                break
+    return selected
 
 
 def build_observation(
@@ -161,8 +173,8 @@ def post_observations(url: str, token: str | None, observations: list[dict[str, 
             raise RuntimeError(f"ingest endpoint returned HTTP {response.status}")
 
 
-def build_search_query(item_name: str, store: str) -> str:
-    return f"{item_name} {STORE_NAMES.get(store, store)} preço"
+def build_search_query(item: dict[str, Any]) -> str:
+    return f"{item.get('search', item['name'])} preço"
 
 
 def merge_observations(existing: list[dict[str, Any]], incoming: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -175,21 +187,23 @@ def merge_observations(existing: list[dict[str, Any]], incoming: list[dict[str, 
 def collect(api_key: str, collected_at: datetime) -> list[dict[str, Any]]:
     observations: list[dict[str, Any]] = []
     for item in CATALOG:
-        for store in STORES:
-            query = build_search_query(item["name"], store)
-            try:
-                results = serpapi_search(api_key, query)
-                selected = select_store_result(results, store)
+        query = build_search_query(item)
+        try:
+            results = serpapi_search(api_key, query)
+            selected_by_store = select_store_results(results)
+            for store in STORES:
+                selected = selected_by_store.get(store)
                 if selected:
                     observations.append(build_observation(item_id=item["id"], item_name=item["name"], store=store, result=selected, collected_at=collected_at))
                 else:
                     print(f"unavailable: {item['id']} / {store}", file=sys.stderr)
-            except SerpApiNoResultsError as exc:
+        except SerpApiNoResultsError as exc:
+            for store in STORES:
                 print(f"unavailable: {item['id']} / {store}: {exc}", file=sys.stderr)
-            except SerpApiAuthError:
-                raise
-            except Exception as exc:
-                print(f"error: {item['id']} / {store}: {exc}", file=sys.stderr)
+        except SerpApiAuthError:
+            raise
+        except Exception as exc:
+            print(f"error: {item['id']}: {exc}", file=sys.stderr)
     return observations
 
 

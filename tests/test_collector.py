@@ -3,12 +3,14 @@ from datetime import datetime, timezone
 from unittest.mock import patch
 
 from collector import (
+    CATALOG,
     SerpApiAuthError,
     build_observation,
     classify_serpapi_error,
     build_search_query,
     merge_observations,
     collect,
+    select_store_results,
     parse_brl,
     parse_shipping,
     select_store_result,
@@ -25,6 +27,10 @@ class CollectorTests(unittest.TestCase):
         self.assertEqual(parse_shipping("Entrega por R$ 24,90"), 24.90)
         self.assertIsNone(parse_shipping("Consulte o frete"))
 
+    def test_select_store_results_matches_display_names_with_punctuation(self):
+        results = [{"source": "Fast Shop", "price": "R$ 10,00", "link": ""}]
+        self.assertIn("fastshop", select_store_results(results))
+
     def test_select_store_result_requires_matching_store(self):
         results = [
             {"source": "Outra loja", "price": "R$ 10,00", "link": "https://outra.example/p"},
@@ -33,10 +39,27 @@ class CollectorTests(unittest.TestCase):
         chosen = select_store_result(results, "kabum")
         self.assertEqual(chosen["source"], "KaBuM!")
 
-    def test_search_query_avoids_site_operator_for_shopping(self):
-        query = build_search_query("Monitor Gamer LG UltraGear 34G600A", "fastshop")
+    def test_search_query_uses_exact_monitor_term_without_store_repetition(self):
+        monitor = CATALOG[0]
+        self.assertEqual(monitor["search"], "Monitor Gamer LG UltraGear Curvo 34G600A-B")
+        query = build_search_query(monitor)
+        self.assertEqual(query, "Monitor Gamer LG UltraGear Curvo 34G600A-B preço")
         self.assertNotIn("site:", query)
-        self.assertIn("Fast Shop", query)
+
+    def test_select_store_results_classifies_one_shopping_response(self):
+        results = [
+            {"source": "Amazon.com.br", "price": "R$ 10,00", "link": "https://amazon.com.br/p"},
+            {"source": "KaBuM!", "price": "R$ 20,00", "link": "https://kabum.com.br/p"},
+        ]
+        selected = select_store_results(results)
+        self.assertEqual(set(selected), {"amazon", "kabum"})
+
+    def test_collect_queries_once_per_item(self):
+        result = {"source": "Amazon.com.br", "price": "R$ 10,00", "link": "https://amazon.com.br/p"}
+        with patch("collector.serpapi_search", return_value=[result]) as search:
+            observations = collect("key", datetime(2026, 10, 16, tzinfo=timezone.utc))
+        self.assertEqual(search.call_count, len(CATALOG))
+        self.assertEqual(len(observations), len(CATALOG))
 
     def test_serpapi_no_results_is_not_authentication_error(self):
         self.assertEqual(classify_serpapi_error("Google hasn't returned any results for this query."), "no_results")

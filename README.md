@@ -13,7 +13,7 @@ Sem `ARTIFACT_INGEST_URL`, os resultados ficam disponíveis como `observations.j
 
 ## Limitações
 
-- A SerpAPI retorna resultados de pesquisa do Google Shopping; preço, estoque, vendedor e frete podem variar.
+- A SerpAPI retorna resultados de pesquisa do Google Shopping; o coletor faz uma consulta consolidada por componente e classifica os resultados por loja e domínio. Preço, estoque, vendedor e frete podem variar.
 - O frete só é somado quando a resposta informa frete grátis ou um valor identificável. Caso contrário, `total` fica nulo.
 - A pesquisa não inventa valores quando uma loja não é encontrada.
 - O cálculo exato do frete para o CEP 71592-074 depende da loja, do vendedor e, em alguns casos, de uma etapa autenticada de checkout.

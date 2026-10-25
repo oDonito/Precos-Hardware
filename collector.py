@@ -1,6 +1,6 @@
 """Daily price collector for the PC-parts radar.
 
-The collector queries SerpAPI's Google Shopping endpoint and emits observations
+The collector queries Serper's Google Shopping endpoint and emits observations
 as JSONL. It deliberately does not invent prices, shipping, availability or URLs.
 A persistence endpoint can be configured with ARTIFACT_INGEST_URL; the workflow
 sends the JSON payload there when the variable is present.
@@ -14,7 +14,7 @@ import sys
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
-from urllib.parse import urlencode
+from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
 STORE_NAMES = {
@@ -35,21 +35,16 @@ STORES = {
     "amazon": ["amazon.com.br"],
 }
 
-class SerpApiAuthError(RuntimeError):
-    """Raised when SerpAPI rejects the configured API key."""
+class SerperAuthError(RuntimeError):
+    """Raised when Serper rejects the configured API key."""
 
 
-class SerpApiNoResultsError(RuntimeError):
-    """Raised when SerpAPI returns no Google results for a query."""
+class SerperQuotaError(RuntimeError):
+    """Raised when Serper rejects a request because of quota or rate limits."""
 
 
-def classify_serpapi_error(message: str) -> str:
-    text = message.lower()
-    if any(marker in text for marker in ("invalid api key", "unauthorized", "authentication", "api key")):
-        return "auth"
-    if "hasn't returned any results" in text or "no results" in text:
-        return "no_results"
-    return "other"
+class SerperNoResultsError(RuntimeError):
+    """Raised when Serper returns no shopping results for a query."""
 
 
 CATALOG = [
@@ -138,28 +133,60 @@ def build_observation(
         "url": result.get("link"),
         "seller": result.get("source"),
         "availability": "available" if price is not None else "unavailable",
-        "confidence": "serpapi_google_shopping",
-        "notes": "Frete confirmado pela descrição retornada pela SerpAPI." if shipping is not None else "Frete não confirmado; total não calculado.",
+        "confidence": "serper_google_shopping",
+        "notes": "Frete confirmado pela descrição retornada pelo Serper." if shipping is not None else "Frete não confirmado; total não calculado.",
     }
 
 
-def serpapi_search(api_key: str, query: str, location: str = "Brasília, Federal District, Brazil") -> list[dict[str, Any]]:
-    params = urlencode({"engine": "google_shopping", "q": query, "location": location, "hl": "pt-br", "gl": "br", "api_key": api_key})
-    request = Request(f"https://serpapi.com/search.json?{params}", headers={"User-Agent": "radar-precos-github/1.0"})
+def normalize_serper_shopping_response(payload: dict[str, Any]) -> list[dict[str, Any]]:
+    """Normalize Serper shopping product fields to the collector's stable shape."""
+    results = payload.get("shopping", [])
+    normalized = []
+    for row in results:
+        if not isinstance(row, dict):
+            continue
+        normalized.append({
+            **row,
+            "source": row.get("source") or row.get("merchant") or row.get("seller"),
+            "link": row.get("link") or row.get("productLink") or row.get("url"),
+            "price": row.get("price") or row.get("extractedPrice"),
+            "delivery": row.get("delivery") or row.get("shipping"),
+        })
+    return normalized
+
+
+def serper_search(api_key: str, query: str) -> list[dict[str, Any]]:
+    """Search Google Shopping through Serper; endpoint responses are not logged."""
+    body = json.dumps({"q": query, "gl": "br", "hl": "pt-br"}).encode("utf-8")
+    request = Request(
+        "https://google.serper.dev/shopping",
+        data=body,
+        headers={"X-API-KEY": api_key, "Content-Type": "application/json"},
+        method="POST",
+    )
     try:
         with urlopen(request, timeout=45) as response:
             payload = json.load(response)
-    except Exception as exc:
-        status = getattr(exc, "code", None)
-        if status in (401, 403):
-            raise SerpApiAuthError("SerpAPI rejeitou SERPAPI_API_KEY; verifique se o secret contém uma chave ativa e sem espaços extras.") from exc
-        raise
-    if isinstance(payload, dict) and payload.get("error"):
-        message = str(payload["error"])
-        if classify_serpapi_error(message) == "no_results":
-            raise SerpApiNoResultsError(message)
-        raise SerpApiAuthError(f"SerpAPI rejeitou a consulta: {message}")
-    return payload.get("shopping_results", [])
+    except HTTPError as exc:
+        if exc.code in (401, 403):
+            raise SerperAuthError("Serper rejeitou SERPER_API_KEY; confira se o secret contém uma chave ativa e sem espaços extras.") from exc
+        if exc.code == 429:
+            raise SerperQuotaError("Serper recusou a consulta por limite de uso (HTTP 429).") from exc
+        raise RuntimeError(f"Serper respondeu HTTP {exc.code}.") from exc
+    except URLError as exc:
+        raise RuntimeError("Não foi possível conectar ao endpoint do Serper.") from exc
+    if not isinstance(payload, dict):
+        raise RuntimeError("Resposta inesperada do Serper: JSON não é um objeto.")
+    if payload.get("message") or payload.get("error"):
+        message = str(payload.get("message") or payload.get("error"))
+        lowered = message.lower()
+        if any(marker in lowered for marker in ("invalid api key", "unauthorized", "api key", "authentication")):
+            raise SerperAuthError("Serper rejeitou SERPER_API_KEY; confira o secret no GitHub Actions.")
+        raise RuntimeError(f"Serper retornou erro: {message}")
+    results = payload.get("shopping", [])
+    if not isinstance(results, list):
+        raise RuntimeError("Resposta inesperada do Serper: campo shopping não é uma lista.")
+    return normalize_serper_shopping_response(payload)
 
 
 def post_observations(url: str, token: str | None, observations: list[dict[str, Any]]) -> None:
@@ -189,7 +216,7 @@ def collect(api_key: str, collected_at: datetime) -> list[dict[str, Any]]:
     for item in CATALOG:
         query = build_search_query(item)
         try:
-            results = serpapi_search(api_key, query)
+            results = serper_search(api_key, query)
             selected_by_store = select_store_results(results)
             for store in STORES:
                 selected = selected_by_store.get(store)
@@ -197,10 +224,10 @@ def collect(api_key: str, collected_at: datetime) -> list[dict[str, Any]]:
                     observations.append(build_observation(item_id=item["id"], item_name=item["name"], store=store, result=selected, collected_at=collected_at))
                 else:
                     print(f"unavailable: {item['id']} / {store}", file=sys.stderr)
-        except SerpApiNoResultsError as exc:
+        except SerperNoResultsError as exc:
             for store in STORES:
                 print(f"unavailable: {item['id']} / {store}: {exc}", file=sys.stderr)
-        except SerpApiAuthError:
+        except (SerperAuthError, SerperQuotaError):
             raise
         except Exception as exc:
             print(f"error: {item['id']}: {exc}", file=sys.stderr)
@@ -208,14 +235,14 @@ def collect(api_key: str, collected_at: datetime) -> list[dict[str, Any]]:
 
 
 def main() -> int:
-    api_key = os.environ.get("SERPAPI_API_KEY", "").strip()
+    api_key = os.environ.get("SERPER_API_KEY", "").strip()
     if not api_key:
-        print("SERPAPI_API_KEY is required", file=sys.stderr)
+        print("SERPER_API_KEY is required", file=sys.stderr)
         return 2
     collected_at = datetime.now(timezone.utc)
     try:
         observations = collect(api_key, collected_at)
-    except SerpApiAuthError as exc:
+    except (SerperAuthError, SerperQuotaError) as exc:
         print(str(exc), file=sys.stderr)
         return 3
     output = Path(os.environ.get("OUTPUT_JSONL", "observations.jsonl"))

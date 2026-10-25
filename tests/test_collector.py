@@ -1,12 +1,15 @@
+import io
+import json
 import unittest
 from datetime import datetime, timezone
+from urllib.error import HTTPError
 from unittest.mock import patch
 
 from collector import (
     CATALOG,
-    SerpApiAuthError,
+    SerperAuthError,
+    SerperQuotaError,
     build_observation,
-    classify_serpapi_error,
     build_search_query,
     merge_observations,
     collect,
@@ -14,6 +17,7 @@ from collector import (
     parse_brl,
     parse_shipping,
     select_store_result,
+    serper_search,
 )
 
 
@@ -54,22 +58,48 @@ class CollectorTests(unittest.TestCase):
         selected = select_store_results(results)
         self.assertEqual(set(selected), {"amazon", "kabum"})
 
+    def test_serper_search_posts_to_shopping_with_api_key_header(self):
+        from collector import serper_search
+        payload = {"shopping": [{"title": "SSD 1TB", "source": "Amazon.com.br", "price": "R$ 799,90", "link": "https://amazon.com.br/p"}]}
+        response = io.BytesIO(json.dumps(payload).encode("utf-8"))
+        with patch("collector.urlopen", return_value=response) as mocked:
+            results = serper_search("test-key-not-real", "SSD 1TB preço")
+        request = mocked.call_args.args[0]
+        self.assertEqual(request.full_url, "https://google.serper.dev/shopping")
+        self.assertEqual(request.get_method(), "POST")
+        self.assertEqual(request.get_header("X-api-key"), "test-key-not-real")
+        self.assertEqual(json.loads(request.data)["q"], "SSD 1TB preço")
+        self.assertEqual(results[0]["source"], "Amazon.com.br")
+
+    def test_serper_401_maps_to_auth_error(self):
+        from collector import serper_search
+        error = HTTPError("https://google.serper.dev/shopping", 401, "Unauthorized", {}, io.BytesIO())
+        with patch("collector.urlopen", side_effect=error):
+            with self.assertRaises(SerperAuthError):
+                serper_search("bad-key", "SSD 1TB")
+
+    def test_serper_429_maps_to_quota_error(self):
+        from collector import SerperQuotaError, serper_search
+        error = HTTPError("https://google.serper.dev/shopping", 429, "Too Many Requests", {}, io.BytesIO())
+        with patch("collector.urlopen", side_effect=error):
+            with self.assertRaises(SerperQuotaError):
+                serper_search("test-key-not-real", "SSD 1TB")
+
+    def test_parse_serper_shopping_response_fields(self):
+        from collector import normalize_serper_shopping_response
+        payload = {"shopping": [{"title": "SSD 1TB", "source": "Amazon.com.br", "price": "R$ 799,90", "link": "https://amazon.com.br/p", "delivery": "Frete grátis"}]}
+        self.assertEqual(normalize_serper_shopping_response(payload)[0]["price"], "R$ 799,90")
+
     def test_collect_queries_once_per_item(self):
         result = {"source": "Amazon.com.br", "price": "R$ 10,00", "link": "https://amazon.com.br/p"}
-        with patch("collector.serpapi_search", return_value=[result]) as search:
+        with patch("collector.serper_search", return_value=[result]) as search:
             observations = collect("key", datetime(2026, 10, 16, tzinfo=timezone.utc))
         self.assertEqual(search.call_count, len(CATALOG))
         self.assertEqual(len(observations), len(CATALOG))
 
-    def test_serpapi_no_results_is_not_authentication_error(self):
-        self.assertEqual(classify_serpapi_error("Google hasn't returned any results for this query."), "no_results")
-
-    def test_serpapi_invalid_key_is_authentication_error(self):
-        self.assertEqual(classify_serpapi_error("Invalid API key"), "auth")
-
-    def test_serpapi_authentication_error_is_propagated(self):
-        with patch("collector.serpapi_search", side_effect=SerpApiAuthError("invalid key")):
-            with self.assertRaises(SerpApiAuthError):
+    def test_serper_invalid_key_is_authentication_error(self):
+        with patch("collector.serper_search", side_effect=SerperAuthError("invalid key")):
+            with self.assertRaises(SerperAuthError):
                 collect("bad-key", datetime(2026, 10, 14, tzinfo=timezone.utc))
 
     def test_merge_observations_handles_empty_incoming_without_loss(self):

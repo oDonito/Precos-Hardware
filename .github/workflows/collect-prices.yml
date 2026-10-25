@@ -66,29 +66,17 @@ jobs:
           dates = sorted({row.get('collectedAt', '')[:10] for row in rows if row.get('collectedAt')})
           print(f'Histórico recuperado: {len(rows)} observações em {dates}')
           PY
-      - name: Validar secret SerpAPI
+      - name: Validar configuração Serper
         env:
-          SERPAPI_API_KEY: ${{ secrets.SERPAPI_API_KEY }}
+          SERPER_API_KEY: ${{ secrets.SERPER_API_KEY }}
         run: |
-          test -n "$SERPAPI_API_KEY"
-          python - <<'PY'
-          import os, sys, urllib.parse, urllib.request
-          key = os.environ['SERPAPI_API_KEY'].strip()
-          url = 'https://serpapi.com/account.json?' + urllib.parse.urlencode({'api_key': key})
-          try:
-              with urllib.request.urlopen(url, timeout=30) as response:
-                  payload = response.read().decode('utf-8')
-          except Exception as exc:
-              print(f'Falha ao validar SERPAPI_API_KEY: {type(exc).__name__}', file=sys.stderr)
-              raise SystemExit(1)
-          if 'error' in payload.lower() or 'unauthorized' in payload.lower():
-              print('SERPAPI_API_KEY foi rejeitada pela SerpAPI.', file=sys.stderr)
-              raise SystemExit(1)
-          print('SERPAPI_API_KEY aceita pela SerpAPI; conteúdo da resposta não será exibido.')
-          PY
-      - name: Coletar preços via SerpAPI
+          if [ -z "$SERPER_API_KEY" ]; then
+            echo "Configure SERPER_API_KEY em Settings → Secrets and variables → Actions."
+            exit 1
+          fi
+      - name: Coletar preços via Serper Google Shopping
         env:
-          SERPAPI_API_KEY: ${{ secrets.SERPAPI_API_KEY }}
+          SERPER_API_KEY: ${{ secrets.SERPER_API_KEY }}
         run: python collector.py
       - name: Verificar preservação do histórico
         run: |
